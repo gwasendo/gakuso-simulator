@@ -25,7 +25,7 @@ last_deploy:
 
 ## 使い方
 
-**公開URL: https://shuzo-yamamoto.github.io/gakuso-simulator/**
+**公開URL: https://gwasendo.github.io/gakuso-simulator/**
 
 上記URLをブラウザで開けばそのまま使えます（PC: Chrome/Edge、iPad: Safari）。
 インストール・サーバー・ビルドは不要です。
