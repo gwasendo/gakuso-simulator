@@ -319,8 +319,10 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
     <!-- 入子：金 -->
     <div class="liner-card" id="lc-inner-gold" onclick="selectLiner('inner-gold')"
       style="border:1px solid #e0e0e0;border-radius:10px;padding:10px;cursor:pointer;text-align:center;background:#fff">
-      <div style="width:100%;height:28px;border-radius:4px;margin-bottom:6px;
-        background:linear-gradient(180deg,#8B6914 0%,#FFD700 30%,#DAA520 50%,#FFE066 70%,#C8960C 100%)"></div>
+      <!-- v24.0.1: 配色を実際の描画と共通の定数から描く（updateLinenPreviews） -->
+      <div style="width:100%;height:28px;border-radius:4px;margin-bottom:6px;overflow:hidden;position:relative">
+        <canvas id="inner-preview-gold" width="200" height="28" style="width:100%;height:100%;display:block"></canvas>
+      </div>
       <div style="font-size:13px;font-weight:500;color:#1a1a1a">入子：金</div>
       <div style="font-size:11px;color:#aaa">金装飾のみ</div>
     </div>
@@ -328,8 +330,10 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
     <!-- 入子：銀 -->
     <div class="liner-card" id="lc-inner-silver" onclick="selectLiner('inner-silver')"
       style="border:1px solid #e0e0e0;border-radius:10px;padding:10px;cursor:pointer;text-align:center;background:#fff">
-      <div style="width:100%;height:28px;border-radius:4px;margin-bottom:6px;
-        background:linear-gradient(180deg,#666 0%,#ddd 30%,#aaa 50%,#eee 70%,#888 100%)"></div>
+      <!-- v24.0.1: 配色を実際の描画と共通の定数から描く（updateLinenPreviews） -->
+      <div style="width:100%;height:28px;border-radius:4px;margin-bottom:6px;overflow:hidden;position:relative">
+        <canvas id="inner-preview-silver" width="200" height="28" style="width:100%;height:100%;display:block"></canvas>
+      </div>
       <div style="font-size:13px;font-weight:500;color:#1a1a1a">入子：銀</div>
       <div style="font-size:11px;color:#aaa">銀装飾のみ</div>
     </div>
@@ -501,28 +505,53 @@ function makeLinenTexture(metalType, S){
   return big;
 }
 
-// ライナープレビューをカードに描画
+/*
+  ライナー・入子の金属配色（v24.0.1）
+  ─────────────────────────────────────────────────────────────
+  実際の描画（renderFraming）と、種類選択カードの見本の両方がこの定数を参照する。
+  以前はカード用と描画用に別々に書いていたため、銀ライナーのカードだけ
+  仕上がりより明るい色になっていた。値は「実際の描画」を正とした
+  （docs/decisions/2026-11-21-liner-card-preview-colors.md）。
+  グラデーションの位置は、色の数で均等に割る（0 / 25 / 50 / 75 / 100%）。
+*/
+const LINER_METAL_STOPS={
+  gold:  ['#8B6914','#FFD700','#DAA520','#FFE066','#C8960C'],
+  silver:['#666666','#DDDDDD','#AAAAAA','#EEEEEE','#888888']
+};
+
+// 種類選択カードに見本の色帯を描く（ライナー2枚・入子2枚）
 function updateLinenPreviews(){
   ['gold','silver'].forEach(metal=>{
+    const stops=LINER_METAL_STOPS[metal];
+
+    // ── ライナー：麻地＋金属ライン ──
     const pc=document.getElementById('liner-preview-'+metal);
-    if(!pc)return;
-    const ctx2=pc.getContext('2d');
-    ctx2.clearRect(0,0,pc.width,pc.height);
-    // 麻地部分（右端15%を金属ラインに）
-    const lineW=Math.round(pc.width*0.13);
-    const linenW=pc.width-lineW;
-    // 麻地テクスチャを貼る
-    const tile=makeLinenTexture(metal);
-    const pat=ctx2.createPattern(tile,'repeat');
-    ctx2.fillStyle=pat;
-    ctx2.fillRect(0,0,linenW,pc.height);
-    // 金属ライン
-    const stops=metal==='gold'
-      ?['#8B6914','#FFD700','#DAA520','#FFE066','#C8960C']
-      :['#888','#E8E8E8','#B0B0B0','#F0F0F0','#999'];
-    const g=ctx2.createLinearGradient(linenW,0,pc.width,0);
-    stops.forEach((c,i)=>g.addColorStop(i/(stops.length-1),c));
-    ctx2.fillStyle=g; ctx2.fillRect(linenW,0,lineW,pc.height);
+    if(pc){
+      const ctx2=pc.getContext('2d');
+      ctx2.clearRect(0,0,pc.width,pc.height);
+      // 麻地部分（右端13%を金属ラインに）
+      const lineW=Math.round(pc.width*0.13);
+      const linenW=pc.width-lineW;
+      // 麻地テクスチャを貼る
+      const tile=makeLinenTexture(metal);
+      const pat=ctx2.createPattern(tile,'repeat');
+      ctx2.fillStyle=pat;
+      ctx2.fillRect(0,0,linenW,pc.height);
+      // 金属ライン
+      const g=ctx2.createLinearGradient(linenW,0,pc.width,0);
+      stops.forEach((c,i)=>g.addColorStop(i/(stops.length-1),c));
+      ctx2.fillStyle=g; ctx2.fillRect(linenW,0,lineW,pc.height);
+    }
+
+    // ── 入子：金属のみ（上から下へのグラデーション） ──
+    const ic=document.getElementById('inner-preview-'+metal);
+    if(ic){
+      const ictx=ic.getContext('2d');
+      ictx.clearRect(0,0,ic.width,ic.height);
+      const g=ictx.createLinearGradient(0,0,0,ic.height);
+      stops.forEach((c,i)=>g.addColorStop(i/(stops.length-1),c));
+      ictx.fillStyle=g; ictx.fillRect(0,0,ic.width,ic.height);
+    }
   });
 }
 function selectLiner(type){
@@ -1794,9 +1823,8 @@ function renderFraming(ctx, L){
     const lx=iX-LW, ly=iY-LW, lw=iW+LW*2, lh=iH+LW*2;
     const isLiner=linerType.startsWith('liner');
     const isGold=linerType.endsWith('gold');
-    const metalStops=isGold
-      ?['#8B6914','#FFD700','#DAA520','#FFE066','#C8960C']
-      :['#666666','#DDDDDD','#AAAAAA','#EEEEEE','#888888'];
+    // 金属の配色はカードと共通の定数から取る（v24.0.1。値はv24.0と同一）
+    const metalStops=LINER_METAL_STOPS[isGold?'gold':'silver'];
 
     if(isLiner){
       /*
