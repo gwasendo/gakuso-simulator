@@ -1922,6 +1922,26 @@ function exportFontStack(px){
 }
 
 /*
+  色の文字列を「#RRGGBB」（大文字6桁）にそろえる（v24.0.1）
+  ─────────────────────────────────────────────────────────────
+  キャプションの色はHEX値で記載する決まり（設計書§3.5-2）。
+  マットのプリセットは "#ffffff" 形式と "rgb(92,110,52)" 形式が混在しているため、
+  どちらで渡されても同じ書式で返す。描画には使わない（表記専用）。
+  解釈できない文字列は、そのまま大文字にして返す（従来と同じ動作）。
+*/
+function toHexUpper(color){
+  const s=String(color).trim();
+  const p2=n=>Math.max(0,Math.min(255,n)).toString(16).padStart(2,'0');
+  let m=s.match(/^#([0-9a-f]{6})$/i);
+  if(m) return '#'+m[1].toUpperCase();
+  m=s.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);       // #abc の短縮形
+  if(m) return ('#'+m[1]+m[1]+m[2]+m[2]+m[3]+m[3]).toUpperCase();
+  m=s.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i);
+  if(m) return ('#'+p2(+m[1])+p2(+m[2])+p2(+m[3])).toUpperCase();
+  return s.toUpperCase();
+}
+
+/*
   キャプション帯の本文3行を組み立てる（設計書§3.5-2）
   免責文言は含めない（帯の最下行として別に描く）
 */
@@ -1959,7 +1979,8 @@ function buildCaptionLines(now){
       const name=NAMES[menkinColor]||menkinColor.toUpperCase();
       menkin=`面金 ${name} ${menkinMM}mm`;
     }
-    line3=`マット幅 ${matMM}mm　マット色 ${matColor.toUpperCase()}　${menkin}`;
+    // マット色はHEX値で記載する（設計書§3.5-2）。プリセットの一部は rgb(...) 形式で持っているため変換する
+    line3=`マット幅 ${matMM}mm　マット色 ${toHexUpper(matColor)}　${menkin}`;
   }
   return [line1, line2, line3];
 }
