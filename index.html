@@ -390,6 +390,14 @@ let ftype='', matColor='#ffffff';
 let linerType='none';
 
 /*
+  v24.1 Step5 — ライナー・入子のカラー指定（設計書§3.6-4）
+  3つとも null のときは、v24.0.1 とまったく同じ描画になる（設計書§4.3・§7 T-11）。
+*/
+let linerLinenColor=null; // 麻地の地色（'#RRGGBB'）。null＝標準の麻地
+let linerMetalColor=null; // 金属の指定色（'#RRGGBB'）。null＝金・銀のプリセット
+let linerSampleImg=null;  // スポイト用に読み込んだ写真（Image）。描画には使わない
+
+/*
   v24 Step1 — フレームの種類（設計書§4.1）
   'pattern' … 柄物（模様あり）。v23と完全に同じ処理を通る（後方互換）
   'plain'   … 無地（単色・シンプル）。処理B プロファイル押し出しを適用
@@ -439,8 +447,13 @@ let lastHStrip=null;
      1倍のタイルを作ってから、補間なし（最近傍）で S 倍に画素複製する。
      補間を使わないので、エクスポートの織り目はプレビューの厳密な S 倍拡大になる。
 */
-function makeLinenTexture(metalType, S){
+function makeLinenTexture(metalType, S, baseColor){
   if(S===undefined) S=1;
+  /*
+    v24.1: 地色が指定されたときだけ、別の関数で作る（設計書§3.6-1）。
+    地色が null のときは、この下の v24.0.1 の行をそのまま通る（1行も書き換えていない）。
+  */
+  if(baseColor) return makeLinenTextureWithBase(S, baseColor);
   // タイルサイズ（1/10スケール：横糸0.6px→整数で最小2px、縦糸1.2px→整数で最小2px）
   // タイル全体をTW=4, TH=2に縮小して密な織り目を表現
   const TW=4, TH=2;
@@ -506,6 +519,102 @@ function makeLinenTexture(metalType, S){
 }
 
 /*
+  v24.1 Step5 — 地色を指定した麻地タイル（設計書§3.6-1）
+  ─────────────────────────────────────────────────────────────
+  糸の色は「地色＋一定のずれ」で決める。ずれは v24.0.1 の糸の色を
+  標準の地色 rgb(209,197,184) から引いて逆算した値で、固定とする。
+
+    明るい糸（横糸） ＋31, ＋31, ＋31   …… 不透明度は中央で 1.0
+    暗い糸（縦糸）   −39, −40, −39   …… 中央で 0.7
+    交差点           −59, −59, −58   …… 0.35
+
+  糸の色は 0〜255 に収める（頭打ち）。白や黒に近い地色でも、ずれは縮めない
+  （白麻でも暗い糸の陰で織り目が残るようにするため。設計書§3.6-1-3）。
+  ノイズ・タイルの大きさ・S倍の画素複製は v24.0.1 と同じ。
+  順序は「1倍のタイルを地色で作る → S倍に複製」（設計書§3.5-1）。
+*/
+const LINEN_THREAD_OFFSETS={
+  bright:[31,31,31],
+  dark:  [-39,-40,-39],
+  cross: [-59,-59,-58]
+};
+
+// '#RRGGBB' を [R,G,B] に変換する
+function hexToRgb(hex){
+  const s=String(hex).replace('#','');
+  return [parseInt(s.slice(0,2),16), parseInt(s.slice(2,4),16), parseInt(s.slice(4,6),16)];
+}
+
+function makeLinenTextureWithBase(S, baseColor){
+  const base=hexToRgb(baseColor);
+  // 地色にずれを足し、0〜255 に収めた "r,g,b" の文字列を作る
+  const shift=off=>base.map((v,i)=>Math.max(0,Math.min(255,v+off[i]))).join(',');
+  const bright=shift(LINEN_THREAD_OFFSETS.bright);
+  const dark  =shift(LINEN_THREAD_OFFSETS.dark);
+  const cross =shift(LINEN_THREAD_OFFSETS.cross);
+
+  const TW=4, TH=2;
+  const tc=document.createElement('canvas');
+  tc.width=TW; tc.height=TH;
+  const tctx=tc.getContext('2d');
+
+  // 地色
+  tctx.fillStyle=`rgb(${base.join(',')})`;
+  tctx.fillRect(0,0,TW,TH);
+
+  // 横糸（明るい）
+  for(let y=0;y<TH;y+=1){
+    const grad=tctx.createLinearGradient(0,y,0,y+1);
+    grad.addColorStop(0,`rgba(${bright},0)`);
+    grad.addColorStop(0.5,`rgba(${bright},1)`);
+    grad.addColorStop(1,`rgba(${bright},0)`);
+    tctx.fillStyle=grad;
+    tctx.fillRect(0,y,TW,1);
+  }
+
+  // 縦糸（暗め）
+  for(let x=0;x<TW;x+=2){
+    const grad=tctx.createLinearGradient(x,0,x+1,0);
+    grad.addColorStop(0,`rgba(${dark},0)`);
+    grad.addColorStop(0.5,`rgba(${dark},0.7)`);
+    grad.addColorStop(1,`rgba(${dark},0)`);
+    tctx.fillStyle=grad;
+    tctx.fillRect(x,0,1,TH);
+  }
+
+  // 交差点
+  for(let y=0;y<TH;y+=1){
+    for(let x=0;x<TW;x+=2){
+      tctx.fillStyle=`rgba(${cross},0.35)`;
+      tctx.fillRect(x,y,1,1);
+    }
+  }
+
+  // ノイズ（v24.0.1 と同じ固定シードの疑似乱数）
+  let seed=0x9E3779B9;
+  const rnd=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
+  const imgData=tctx.getImageData(0,0,TW,TH);
+  const d=imgData.data;
+  for(let i=0;i<d.length;i+=4){
+    const n=(rnd()-0.5)*14;
+    d[i]=Math.max(0,Math.min(255,d[i]+n));
+    d[i+1]=Math.max(0,Math.min(255,d[i+1]+n));
+    d[i+2]=Math.max(0,Math.min(255,d[i+2]+n));
+  }
+  tctx.putImageData(imgData,0,0);
+
+  if(S===1) return tc;
+
+  // スケールS倍：補間なしで画素をそのまま複製する（地色で作った後に行う）
+  const big=document.createElement('canvas');
+  big.width=TW*S; big.height=TH*S;
+  const bctx=big.getContext('2d');
+  bctx.imageSmoothingEnabled=false;
+  bctx.drawImage(tc, 0,0, TW,TH, 0,0, TW*S,TH*S);
+  return big;
+}
+
+/*
   ライナー・入子の金属配色（v24.0.1）
   ─────────────────────────────────────────────────────────────
   実際の描画（renderFraming）と、種類選択カードの見本の両方がこの定数を参照する。
@@ -519,12 +628,49 @@ const LINER_METAL_STOPS={
   silver:['#666666','#DDDDDD','#AAAAAA','#EEEEEE','#888888']
 };
 
-// 種類選択カードに見本の色帯を描く（ライナー2枚・入子2枚）
+/*
+  v24.1 Step5 — 指定色から金属の5段の配色を作る（設計書§3.6-2）
+  ─────────────────────────────────────────────────────────────
+  c ＝指定色の各チャンネルの値として、
+
+    1段目 c × 0.6                 … 影
+    2段目 c ＋ (255 − c) × 0.6    … 光（白に寄せる）
+    3段目 c                       … 地の色
+    4段目 c ＋ (255 − c) × 0.8    … 最も強い光
+    5段目 c × 0.8                 … 反対側の影
+
+  を四捨五入する。係数は既存の銀の配色から逆算したもので、
+  #AAAAAA を指定すると LINER_METAL_STOPS.silver と完全に一致する。
+  光を掛け算にしないのは、明るい色が255で頭打ちになり色相がずれるため。
+  ※ この係数は実機確認の結果で見直す可能性がある（docs/decisions/2026-11-21-liner-custom-color.md）
+*/
+function deriveMetalStops(hex){
+  const c=hexToRgb(hex);
+  const toHex=rgb=>'#'+rgb.map(v=>Math.round(v).toString(16).padStart(2,'0')).join('').toUpperCase();
+  const shade=k=>toHex(c.map(v=>v*k));
+  const light=f=>toHex(c.map(v=>v+(255-v)*f));
+  return [shade(0.6), light(0.6), toHex(c), light(0.8), shade(0.8)];
+}
+
+/*
+  金属の5段の配色を返す（設計書§3.6-2-3）
+  実際の描画と種類選択カードは、必ずこの関数を通して配色を得る（配色の定義を1か所に保つため）。
+  customHex が null なら、金・銀のプリセット（v24.0.1 と同じ値）をそのまま返す。
+*/
+function getLinerMetalStops(metal, customHex){
+  return customHex ? deriveMetalStops(customHex) : LINER_METAL_STOPS[metal];
+}
+
+/*
+  種類選択カードに見本の色帯を描く（ライナー2枚・入子2枚）
+  v24.1: 選択中のカードだけ、指定した色を反映する（設計書§4.4）。
+  他のカードはプリセットの配色のまま表示し、押せばプリセットに戻ることが見た目で分かるようにする。
+*/
 function updateLinenPreviews(){
   ['gold','silver'].forEach(metal=>{
-    const stops=LINER_METAL_STOPS[metal];
-
     // ── ライナー：麻地＋金属ライン ──
+    const linerSel = (linerType==='liner-'+metal);
+    const stops=getLinerMetalStops(metal, linerSel ? linerMetalColor : null);
     const pc=document.getElementById('liner-preview-'+metal);
     if(pc){
       const ctx2=pc.getContext('2d');
@@ -533,7 +679,7 @@ function updateLinenPreviews(){
       const lineW=Math.round(pc.width*0.13);
       const linenW=pc.width-lineW;
       // 麻地テクスチャを貼る
-      const tile=makeLinenTexture(metal);
+      const tile=makeLinenTexture(metal, 1, linerSel ? linerLinenColor : null);
       const pat=ctx2.createPattern(tile,'repeat');
       ctx2.fillStyle=pat;
       ctx2.fillRect(0,0,linenW,pc.height);
@@ -544,12 +690,14 @@ function updateLinenPreviews(){
     }
 
     // ── 入子：金属のみ（上から下へのグラデーション） ──
+    const innerSel = (linerType==='inner-'+metal);
+    const innerStops=getLinerMetalStops(metal, innerSel ? linerMetalColor : null);
     const ic=document.getElementById('inner-preview-'+metal);
     if(ic){
       const ictx=ic.getContext('2d');
       ictx.clearRect(0,0,ic.width,ic.height);
       const g=ictx.createLinearGradient(0,0,0,ic.height);
-      stops.forEach((c,i)=>g.addColorStop(i/(stops.length-1),c));
+      innerStops.forEach((c,i)=>g.addColorStop(i/(innerStops.length-1),c));
       ictx.fillStyle=g; ictx.fillRect(0,0,ic.width,ic.height);
     }
   });
@@ -1823,8 +1971,8 @@ function renderFraming(ctx, L){
     const lx=iX-LW, ly=iY-LW, lw=iW+LW*2, lh=iH+LW*2;
     const isLiner=linerType.startsWith('liner');
     const isGold=linerType.endsWith('gold');
-    // 金属の配色はカードと共通の定数から取る（v24.0.1。値はv24.0と同一）
-    const metalStops=LINER_METAL_STOPS[isGold?'gold':'silver'];
+    // 金属の配色はカードと共通の関数から取る（v24.1。指定色が null なら v24.0.1 と同じ定数の値）
+    const metalStops=getLinerMetalStops(isGold?'gold':'silver', linerMetalColor);
 
     if(isLiner){
       /*
@@ -1846,7 +1994,8 @@ function renderFraming(ctx, L){
       // 麻地テクスチャ生成（金銀共通、実画像分析に基づく織り目）
       // スケールSを渡し、織り目もS倍にする（設計書§3.5-1）
       function makeLinenTile(){
-        return makeLinenTexture(linerType.endsWith('gold')?'gold':'silver', S);
+        // v24.1: 地色（null なら v24.0.1 と同じ標準の麻地）を渡す。地色で作ってからS倍する
+        return makeLinenTexture(linerType.endsWith('gold')?'gold':'silver', S, linerLinenColor);
       }
       const linenTile=makeLinenTile();
       const linenPat=ctx.createPattern(linenTile,'repeat');
