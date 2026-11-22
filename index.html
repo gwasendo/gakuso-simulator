@@ -72,6 +72,12 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
 .reset-btn{font-size:12px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#666;cursor:pointer;margin-top:6px;transition:all 0.15s}
 .reset-btn:hover{background:#f0f0f0}
 .reset-btn:disabled{opacity:0.35;cursor:not-allowed}
+/* v24.1 Step5: ライナー・入子の色指定（設計書§4.4） */
+.liner-color-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.liner-color-label{font-size:12px;color:#888;min-width:56px}
+.liner-color-picker{width:40px;height:32px;border:1px solid #ddd;border-radius:8px;cursor:pointer;padding:2px 3px;background:#fff}
+.liner-color-swatch{width:28px;height:28px;border-radius:50%;border:1px solid #ccc;flex-shrink:0}
+.liner-color-hex{font-size:12px;color:#888;font-family:monospace;min-width:64px}
 .reset-btn+.reset-btn{margin-left:6px}
 </style>
 </head>
@@ -351,6 +357,48 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
       <span id="liner-w-v" style="font-size:13px;font-weight:500;min-width:24px">20</span>
       <span style="font-size:12px;color:#888">mm</span>
     </div>
+  </div>
+
+  <!-- v24.1 Step5: ライナー・入子のカラー指定（設計書§3.6・§4.4）。種類が「なし」のときは欄ごと隠す -->
+  <div id="liner-color-box" style="display:none;margin-top:10px;padding:10px 12px;background:#f8f8f8;border-radius:8px">
+    <!-- 麻地の色（ライナーのときだけ） -->
+    <div id="liner-linen-row" class="liner-color-row">
+      <span class="liner-color-label">麻地の色</span>
+      <input type="color" id="liner-linen-picker" value="#d1c5b8" class="liner-color-picker"
+        oninput="setLinerLinenColor(this.value)" title="麻地の地色を選ぶ"/>
+      <div id="liner-linen-swatch" class="liner-color-swatch"></div>
+      <span id="liner-linen-hex" class="liner-color-hex">標準</span>
+      <button class="reset-btn" style="margin-top:0" onclick="setLinerLinenColor(null)">標準に戻す</button>
+    </div>
+    <!-- 金属の色（ライナー・入子） -->
+    <div id="liner-metal-row" class="liner-color-row">
+      <span class="liner-color-label">金属の色</span>
+      <input type="color" id="liner-metal-picker" value="#daa520" class="liner-color-picker"
+        oninput="setLinerMetalColor(this.value)" title="金属の色を選ぶ"/>
+      <div id="liner-metal-swatch" class="liner-color-swatch"></div>
+      <span id="liner-metal-hex" class="liner-color-hex">金</span>
+      <button class="reset-btn" style="margin-top:0" onclick="setLinerMetalColor(null)">金・銀に戻す</button>
+    </div>
+    <!-- サンプル写真とスポイト -->
+    <div style="margin-top:10px">
+      <div style="font-size:12px;color:#888;margin-bottom:4px">実物サンプルの写真から色を拾う（任意）</div>
+      <input type="file" accept="image/*" id="liner-sample-input" onchange="loadLinerSample(this)" style="font-size:12px"/>
+      <div style="font-size:11px;color:#aaa;margin-top:4px">写真は色を拾うためだけに使います。保存や送信はしません</div>
+    </div>
+    <div id="liner-sample-area" style="display:none;margin-top:8px">
+      <div class="radio-row" style="margin-bottom:6px">
+        <label id="liner-pick-linen-label"><input type="radio" name="liner-pick" value="linen" checked/>麻地の色を拾う</label>
+        <label><input type="radio" name="liner-pick" value="metal"/>金属の色を拾う</label>
+      </div>
+      <!-- 写真（下）と、タップ位置の目印を重ねる透明なcanvas（上）。目印は画面上の重ね描きだけで、
+           シミュレーターの描画・エクスポートのPNGには入らない（設計書§4.4） -->
+      <div style="position:relative">
+        <canvas id="liner-sample-canvas" style="display:block;width:100%;cursor:crosshair;background:#000"></canvas>
+        <canvas id="liner-sample-marker" style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none"></canvas>
+      </div>
+      <div style="font-size:11px;color:#aaa;margin-top:4px">拾いたい場所をタップすると、その周りの色の平均を拾います</div>
+    </div>
+    <div id="liner-color-note" style="display:none;font-size:12px;margin-top:6px"></div>
   </div>
 </div>
 
@@ -704,6 +752,11 @@ function updateLinenPreviews(){
 }
 function selectLiner(type){
   linerType=type;
+  // v24.1: 種類カードを押したら、麻地・金属の指定色を両方とも標準に戻す（設計書§3.6-5）
+  linerLinenColor=null;
+  linerMetalColor=null;
+  updateLinerColorUI();
+  updateLinenPreviews();
   document.querySelectorAll('.liner-card').forEach(c=>{
     c.style.border='1px solid #e0e0e0';
     c.style.background='#fff';
@@ -713,6 +766,196 @@ function selectLiner(type){
   const isLiner=type.startsWith('liner');
   document.getElementById('liner-width-row').style.display=(type==='none')?'none':'block';
   drawPreview();
+}
+
+/*
+  ═══════════════════════════════════════════════════════════════
+   v24.1 Step5 — ライナー・入子の色指定UI（設計書§3.6・§4.4）
+  ═══════════════════════════════════════════════════════════════
+*/
+
+// 麻地の地色を設定する。null で標準に戻す（設計書§3.6-5）
+function setLinerLinenColor(hex){
+  linerLinenColor = hex ? toHexUpper(hex) : null;
+  afterLinerColorChange();
+}
+
+// 金属の色を設定する。null で金・銀のプリセットに戻す（設計書§3.6-5）
+function setLinerMetalColor(hex){
+  linerMetalColor = hex ? toHexUpper(hex) : null;
+  afterLinerColorChange();
+}
+
+// 色を変えたあとの共通処理：表示の更新、カードの見本の更新、再描画
+function afterLinerColorChange(){
+  updateLinerColorUI();
+  updateLinenPreviews();
+  drawPreview();
+}
+
+/*
+  色指定欄の表示を、現在の状態に合わせて更新する（設計書§4.4）
+  ・種類が「なし」なら欄ごと隠す
+  ・入子のときは「麻地の色」と「麻地の色を拾う」を隠す（入子に麻地はないため）
+  ・指定色が null のときは、標準（またはプリセット）の色を見本に出す
+*/
+function updateLinerColorUI(){
+  const $=id=>document.getElementById(id);
+  const box=$('liner-color-box');
+  if(!box) return;
+  box.style.display = (linerType==='none') ? 'none' : 'block';
+  if(linerType==='none') return;
+
+  const isLiner=linerType.startsWith('liner');
+  const metal=linerType.endsWith('gold') ? 'gold' : 'silver';
+
+  // 麻地の色（ライナーのときだけ）
+  $('liner-linen-row').style.display = isLiner ? 'flex' : 'none';
+  const linenShow = linerLinenColor || '#D1C5B8'; // 標準の地色 rgb(209,197,184)
+  $('liner-linen-swatch').style.background = linenShow;
+  $('liner-linen-hex').textContent = linerLinenColor || '標準';
+  $('liner-linen-picker').value = linenShow.toLowerCase();
+
+  // 金属の色
+  const stops=getLinerMetalStops(metal, linerMetalColor);
+  $('liner-metal-swatch').style.background =
+    `linear-gradient(135deg,${stops.join(',')})`;
+  $('liner-metal-hex').textContent = linerMetalColor || (metal==='gold' ? '金' : '銀');
+  $('liner-metal-picker').value = (linerMetalColor || LINER_METAL_STOPS[metal][2]).toLowerCase();
+
+  // スポイトの対象：入子のときは「麻地の色を拾う」を出さず、金属を選んだ状態にする
+  $('liner-pick-linen-label').style.display = isLiner ? '' : 'none';
+  if(!isLiner){
+    const r=document.querySelector('input[name=liner-pick][value=metal]');
+    if(r) r.checked=true;
+  }
+}
+
+// 色指定欄の案内文（エラーは赤字）
+function setLinerColorNote(text, isError){
+  const el=document.getElementById('liner-color-note');
+  if(!el) return;
+  el.textContent=text||'';
+  el.style.display=text?'block':'none';
+  el.style.color=isError?'#ef4444':'#666';
+}
+
+/*
+  サンプル写真の読み込み（設計書§3.6-3）
+  ─────────────────────────────────────────────────────────────
+  ・ObjectURL で読み込み、読み込みが終わったらすぐ revoke する。
+    読み込み中に別の写真に差し替えられたときも、前の URL を revoke する。
+  ・写真は端末の中だけで使い、保存も送信もしない。
+  ・iPad の写真には EXIF の向き情報が付いている。表示（縮小canvas）も色の拾い取り
+    （5×5のcanvas）も、同じ Image を drawImage で描いて行うので、ブラウザが向きを
+    どう扱っても「見えている向き」と「拾う座標」は必ず一致する。
+*/
+let linerSampleUrl=null; // 読み込み中の ObjectURL（差し替え時に revoke するため保持）
+
+function loadLinerSample(input){
+  const file=input.files && input.files[0];
+  if(!file) return;
+  // 前の読み込みが終わっていなければ、その URL を解放する
+  if(linerSampleUrl){ URL.revokeObjectURL(linerSampleUrl); linerSampleUrl=null; }
+  const url=URL.createObjectURL(file);
+  linerSampleUrl=url;
+  const img=new Image();
+  img.onload=()=>{
+    URL.revokeObjectURL(url);
+    if(linerSampleUrl===url) linerSampleUrl=null;
+    linerSampleImg=img;
+    drawLinerSample();
+    setLinerColorNote('');
+  };
+  img.onerror=()=>{
+    URL.revokeObjectURL(url);
+    if(linerSampleUrl===url) linerSampleUrl=null;
+    setLinerColorNote('写真を読み込めませんでした。別の写真を選んでください', true);
+  };
+  img.src=url;
+}
+
+// 読み込んだ写真を、欄の幅いっぱいに縮小して表示する（設計書§4.4）
+function drawLinerSample(){
+  const img=linerSampleImg;
+  if(!img) return;
+  const area=document.getElementById('liner-sample-area');
+  area.style.display='block';
+  const cv=document.getElementById('liner-sample-canvas');
+  const mk=document.getElementById('liner-sample-marker');
+  const W=img.naturalWidth||img.width, H=img.naturalHeight||img.height;
+  // canvas の画素数は最大1000px（大きな写真でもメモリを使いすぎないように）。表示幅はCSSで欄いっぱい
+  const cw=Math.min(W,1000), ch=Math.max(1,Math.round(H*cw/W));
+  cv.width=cw; cv.height=ch;
+  mk.width=cw; mk.height=ch;
+  cv.getContext('2d').drawImage(img,0,0,cw,ch);
+  mk.getContext('2d').clearRect(0,0,cw,ch);
+  cv.onclick=onLinerSampleClick;
+}
+
+/*
+  元画像の座標 (cx, cy) を中心とする 5×5 画素の平均色を返す（設計書§3.6-3）
+  ─────────────────────────────────────────────────────────────
+  ・中心は四捨五入で整数の画素にする（設計書§8）
+  ・写真の端・隅では、5×5 の範囲を画像の内側に寄せる（範囲外の画素は参照しない）
+  ・写真全体を読み込まず、5×5 の範囲だけを等倍・補間なしで小さな canvas に描いて読む
+    （4032×3024 の写真を丸ごと読むと約48MBのメモリを使うため）
+  ・平均は各チャンネルを四捨五入する
+  戻り値: '#RRGGBB'
+*/
+function sampleColor5x5(img, cx, cy){
+  const W=img.naturalWidth||img.width, H=img.naturalHeight||img.height;
+  const w=Math.min(5,W), h=Math.min(5,H);
+  let sx=Math.round(cx)-2, sy=Math.round(cy)-2;
+  sx=Math.max(0, Math.min(W-w, sx));
+  sy=Math.max(0, Math.min(H-h, sy));
+  const c=document.createElement('canvas');
+  c.width=w; c.height=h;
+  const x=c.getContext('2d');
+  x.imageSmoothingEnabled=false;
+  x.drawImage(img, sx,sy,w,h, 0,0,w,h);
+  const d=x.getImageData(0,0,w,h).data;
+  const sum=[0,0,0];
+  for(let i=0;i<d.length;i+=4){ sum[0]+=d[i]; sum[1]+=d[i+1]; sum[2]+=d[i+2]; }
+  const n=w*h;
+  return '#'+sum.map(v=>Math.round(v/n).toString(16).padStart(2,'0')).join('').toUpperCase();
+}
+
+/*
+  写真をタップしたとき：タップ位置の色を拾い、選んでいる側（麻地か金属）に設定する
+  1回のタップで決まるのは1色だけ（設計書§3.6-3）
+*/
+function onLinerSampleClick(e){
+  const img=linerSampleImg;
+  if(!img) return;
+  const cv=document.getElementById('liner-sample-canvas');
+  const rect=cv.getBoundingClientRect();
+  if(!rect.width || !rect.height) return;
+  // 画面上の位置 → 縮小canvasの画素 → 元画像の座標（コーナーサンプルの点指定と同じ考え方）
+  const px=(e.clientX-rect.left)*(cv.width/rect.width);
+  const py=(e.clientY-rect.top)*(cv.height/rect.height);
+  const W=img.naturalWidth||img.width, H=img.naturalHeight||img.height;
+  const color=sampleColor5x5(img, px*W/cv.width, py*H/cv.height);
+
+  // タップ位置の目印（重ね描き用のcanvasにだけ描く）
+  const mk=document.getElementById('liner-sample-marker');
+  const m=mk.getContext('2d');
+  m.clearRect(0,0,mk.width,mk.height);
+  const r=Math.max(6, Math.round(mk.width/60));
+  m.beginPath(); m.arc(px,py,r,0,Math.PI*2);
+  m.lineWidth=Math.max(2,Math.round(r/3));
+  m.strokeStyle='#ffffff'; m.stroke();
+  m.beginPath(); m.arc(px,py,r+m.lineWidth,0,Math.PI*2);
+  m.lineWidth=1; m.strokeStyle='#000000'; m.stroke();
+
+  const target=(document.querySelector('input[name=liner-pick]:checked')||{}).value;
+  if(target==='linen' && linerType.startsWith('liner')){
+    setLinerLinenColor(color);
+    setLinerColorNote(`麻地の色を ${color} にしました`);
+  } else {
+    setLinerMetalColor(color);
+    setLinerColorNote(`金属の色を ${color} にしました`);
+  }
 }
 // 面金設定
 let menkinOn=false;
@@ -2146,6 +2389,11 @@ function buildCaptionLines(now){
       const kind = linerType.startsWith('liner') ? 'ライナー' : '入子';
       const metal = linerType.endsWith('gold') ? '金' : '銀';
       line3=`${kind}（${metal}）　幅 ${linerMM}mm`;
+      // v24.1: カラー指定を使った場合の表記（設計書§3.5-2 v24.1 追記）
+      // 金属を指定したら「（金）」「（銀）」を外す。色はすべて #RRGGBB で記載する
+      if(linerMetalColor) line3=`${kind}　幅 ${linerMM}mm`;
+      if(linerType.startsWith('liner') && linerLinenColor) line3+=`　麻地 ${toHexUpper(linerLinenColor)}`;
+      if(linerMetalColor) line3+=`　金属 ${toHexUpper(linerMetalColor)}`;
     }
   } else {
     const matMM=parseInt(document.getElementById('mat-w').value)||0;
