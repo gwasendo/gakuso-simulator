@@ -78,6 +78,8 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
 .liner-color-picker{width:40px;height:32px;border:1px solid #ddd;border-radius:8px;cursor:pointer;padding:2px 3px;background:#fff}
 .liner-color-swatch{width:28px;height:28px;border-radius:50%;border:1px solid #ccc;flex-shrink:0}
 .liner-color-hex{font-size:12px;color:#888;font-family:monospace;min-width:64px}
+.liner-hex-input{width:112px;font-size:13px;font-family:monospace;padding:5px 8px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#1a1a1a}
+.liner-hex-input::placeholder{color:#bbb}
 .reset-btn+.reset-btn{margin-left:6px}
 </style>
 </head>
@@ -367,7 +369,11 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
       <input type="color" id="liner-linen-picker" value="#d1c5b8" class="liner-color-picker"
         oninput="setLinerLinenColor(this.value)" title="麻地の地色を選ぶ"/>
       <div id="liner-linen-swatch" class="liner-color-swatch"></div>
-      <span id="liner-linen-hex" class="liner-color-hex">標準</span>
+      <!-- v24.1: HEX入力欄（設計書§4.4「HEX入力欄の規則」）。文字数は制限しない（前後の空白を除いてから判定するため） -->
+      <input type="text" id="liner-linen-hex" class="liner-hex-input" placeholder="標準（D1C5B8）"
+        autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+        oninput="onLinerHexInput('linen',this)" onchange="onLinerHexCommit('linen',this)"
+        onkeydown="if(event.key==='Enter'){this.blur();}" title="HEXで入力（例：#2B2B2B または 2B2B2B）"/>
       <button class="reset-btn" style="margin-top:0" onclick="setLinerLinenColor(null)">標準に戻す</button>
     </div>
     <!-- 金属の色（ライナー・入子） -->
@@ -376,7 +382,10 @@ canvas#preview{max-width:100%;border-radius:2px;box-shadow:0 4px 20px rgba(0,0,0
       <input type="color" id="liner-metal-picker" value="#daa520" class="liner-color-picker"
         oninput="setLinerMetalColor(this.value)" title="金属の色を選ぶ"/>
       <div id="liner-metal-swatch" class="liner-color-swatch"></div>
-      <span id="liner-metal-hex" class="liner-color-hex">金</span>
+      <input type="text" id="liner-metal-hex" class="liner-hex-input" placeholder="金（DAA520）"
+        autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+        oninput="onLinerHexInput('metal',this)" onchange="onLinerHexCommit('metal',this)"
+        onkeydown="if(event.key==='Enter'){this.blur();}" title="HEXで入力（例：#2B2B2B または 2B2B2B）"/>
       <button class="reset-btn" style="margin-top:0" onclick="setLinerMetalColor(null)">金・銀に戻す</button>
     </div>
     <!-- サンプル写真とスポイト -->
@@ -788,6 +797,9 @@ function setLinerMetalColor(hex){
 
 // 色を変えたあとの共通処理：表示の更新、カードの見本の更新、再描画
 function afterLinerColorChange(){
+  // 色が正しく変わったので、前に出ていた案内文（HEX入力の誤りなど）を消す。
+  // スポイトの「○○の色を…にしました」は、この後に表示し直されるので消えない
+  setLinerColorNote('');
   updateLinerColorUI();
   updateLinenPreviews();
   drawPreview();
@@ -813,14 +825,15 @@ function updateLinerColorUI(){
   $('liner-linen-row').style.display = isLiner ? 'flex' : 'none';
   const linenShow = linerLinenColor || '#D1C5B8'; // 標準の地色 rgb(209,197,184)
   $('liner-linen-swatch').style.background = linenShow;
-  $('liner-linen-hex').textContent = linerLinenColor || '標準';
+  setLinerHexField($('liner-linen-hex'), linerLinenColor, '標準（D1C5B8）');
   $('liner-linen-picker').value = linenShow.toLowerCase();
 
   // 金属の色
   const stops=getLinerMetalStops(metal, linerMetalColor);
   $('liner-metal-swatch').style.background =
     `linear-gradient(135deg,${stops.join(',')})`;
-  $('liner-metal-hex').textContent = linerMetalColor || (metal==='gold' ? '金' : '銀');
+  setLinerHexField($('liner-metal-hex'), linerMetalColor,
+    (metal==='gold' ? '金' : '銀')+'（'+LINER_METAL_STOPS[metal][2].slice(1)+'）');
   $('liner-metal-picker').value = (linerMetalColor || LINER_METAL_STOPS[metal][2]).toLowerCase();
 
   // スポイトの対象：入子のときは「麻地の色を拾う」を出さず、金属を選んだ状態にする
@@ -829,6 +842,89 @@ function updateLinerColorUI(){
     const r=document.querySelector('input[name=liner-pick][value=metal]');
     if(r) r.checked=true;
   }
+}
+
+/*
+  ─────────────────────────────────────────────────────────────
+   v24.1 — HEX入力欄（設計書§4.4「HEX入力欄の規則」）
+  ─────────────────────────────────────────────────────────────
+  iPad Safari の色選択は数値の入力が RGB のみで、HEX を直接打ち込めない。
+  キャプションや README は HEX で色を表記しているので、HEX でも入力できるようにする。
+  色選択UIと同じ状態変数（linerLinenColor／linerMetalColor）を書き換えるので、
+  どちらを操作しても、もう一方の表示が updateLinerColorUI() で更新される（双方向の連動）。
+*/
+
+/*
+  HEX の入力を判定する（判定の規則はこの関数1か所にまとめる）
+  ・前後の空白を除いてから判定する（入力欄の文字数は制限しない）
+  ・先頭の # は1つだけ取り除く。# が2つ以上・途中にある場合は「16進以外の文字」
+  ・16進以外の文字の判定を、桁数の判定より先に行う（案内の優先順位。設計書§4.4-5）
+  戻り値: {ok:true, hex:'#RRGGBB'} または {ok:false, reason:'empty'|'char'|'length'}
+*/
+function parseHexInput(text){
+  let s=String(text==null?'':text).trim();
+  if(s==='') return {ok:false, reason:'empty'};
+  if(s.charAt(0)==='#') s=s.slice(1);
+  if(!/^[0-9a-fA-F]*$/.test(s)) return {ok:false, reason:'char'};
+  if(s.length!==6) return {ok:false, reason:'length'};
+  return {ok:true, hex:'#'+s.toUpperCase()};
+}
+
+// 判定の結果に対応する案内文（設計書§4.4-5）
+const HEX_INPUT_MESSAGES={
+  length:'色は6桁で入力してください（例：#2B2B2B または 2B2B2B）',
+  char:  '使えるのは 0〜9 と A〜F の文字だけです（例：#2B2B2B）'
+};
+
+// 麻地／金属のどちらの状態を扱うかで、読み書きする関数を切り替える
+function linerHexTarget(which){
+  return which==='linen'
+    ? {get:()=>linerLinenColor, set:setLinerLinenColor}
+    : {get:()=>linerMetalColor, set:setLinerMetalColor};
+}
+
+/*
+  入力欄の表示を、状態変数に合わせて更新する
+  ・色が指定されていない（null）ときは空欄にし、placeholder で標準の値を見本として出す
+  ・利用者が入力している最中の欄は書き換えない（打っている文字が途中で置き換わらないように）
+*/
+function setLinerHexField(el, value, placeholderText){
+  if(!el) return;
+  el.placeholder=placeholderText;
+  if(document.activeElement===el) return;
+  el.value = value || '';
+}
+
+/*
+  入力中：正しい6桁になった時点でその色を反映する。入力の途中では案内文を出さない
+*/
+function onLinerHexInput(which, el){
+  const r=parseHexInput(el.value);
+  if(!r.ok) return;
+  const t=linerHexTarget(which);
+  if(t.get()!==r.hex) t.set(r.hex);
+  setLinerColorNote('');
+}
+
+/*
+  確定（Enter キー・入力欄から離れる）：
+  ・正しければ、表記を #RRGGBB にそろえる
+  ・空欄なら何もしない（色が未指定なら null のまま。指定済みなら直前の色の表示に戻す）
+  ・正しくなければ案内文を出し、色は変えずに、入力欄の表示を直前の色に戻す
+*/
+function onLinerHexCommit(which, el){
+  const t=linerHexTarget(which);
+  const r=parseHexInput(el.value);
+  if(r.ok){
+    if(t.get()!==r.hex) t.set(r.hex);
+    el.value=r.hex;
+    setLinerColorNote('');
+    return;
+  }
+  // 空欄の確定はエラーではないので、前に出ていた案内文も消す
+  if(r.reason==='empty') setLinerColorNote('');
+  else setLinerColorNote(HEX_INPUT_MESSAGES[r.reason], true);
+  el.value = t.get() || '';
 }
 
 // 色指定欄の案内文（エラーは赤字）
